@@ -1,0 +1,9 @@
+CoAkka HTTP Runtime
+Copyright 2026 Phuong Tran and contributors.
+
+The connector source, type declarations, package metadata, brand material and
+package documentation in this package are licensed under Apache License 2.0.
+See LICENSE for its full terms and PACKAGE-LICENSE.md for file scopes.
+
+Any CoAkka native libraries installed separately retain their accompanying
+license and notice files.
