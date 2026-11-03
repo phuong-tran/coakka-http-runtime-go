@@ -18,13 +18,13 @@ values and scheduling model.
 ## Install and build
 
 ```sh
-go get github.com/phuong-tran/coakka-http-runtime-go@v1.0.0
+go get github.com/phuong-tran/coakka-http-runtime-go@v1.1.2
 ```
 
 Import `github.com/phuong-tran/coakka-http-runtime-go` as `coakkahttp`. Go1.23
 or newer, a C11 cgo compiler and the matching CoAkka HTTP native SDK are
-required. This module contains connector source; the SDK is installed
-separately and carries its own license and notices.
+required. Install the [native SDK 1.1.2](https://github.com/phuong-tran/coakka-publish/tree/main/coakka-http-runtime/native/releases/1.1.2) separately.
+The [first request sample](https://github.com/phuong-tran/coakka-samples/blob/main/coakka-http-runtime/registry-basic/README.md#go) shows the complete setup.
 
 For a non-system SDK installation:
 
