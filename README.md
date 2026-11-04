@@ -229,11 +229,10 @@ identity. A completed HTTP response can carry a 4xx or 5xx status. Inspect
 
 1. Change imports of `github.com/phuong-tran/coakka-http-runtime-go` to
    `github.com/phuong-tran/coakka-http-runtime-go/v2`. The package name remains
-   `coakkahttp`.
+   `coakkahttp`. Update dependencies that still import the v1 connector.
 2. Update the application to use the v2.0.1 Go module and the matching 2.0.1
    native SDK. Replace the build and runtime library paths together.
-3. Run `go mod tidy` and `go test ./...` in your application. The old module
-   path can remain in the module graph if another dependency still imports v1.
+3. Run `go mod tidy` and `go test ./...` in your application.
 
 ## API reference
 
