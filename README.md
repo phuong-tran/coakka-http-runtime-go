@@ -74,6 +74,14 @@ macOS and Linux, keep the versioned library links when deploying and choose a
 loader path for the deployed application. On Windows, put the matching DLL
 beside the deployed executable.
 
+On macOS, if the linker reports `unknown architecture` in a system `.tbd`
+file, use a macOS SDK that matches your compiler and linker. With full Xcode
+selected, set the SDK for this terminal before retrying the build.
+
+```sh
+export SDKROOT="$(xcodebuild -version -sdk macosx Path)"
+```
+
 ## First request
 
 Save this example as `main.go`. It listens on loopback and asks the runtime
