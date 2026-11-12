@@ -2,8 +2,16 @@
 
 ![CoAkka](https://raw.githubusercontent.com/phuong-tran/coakka-samples/a539dfcd7dc8d93c5b1c61b1324899af13d47ca6/docs/common/assets/brand/coakka-logo.png)
 
-Use CoAkka HTTP Runtime to serve HTTP requests, stream responses, handle
-WebSockets, and call configured upstream services from a Go application.
+CoAkka HTTP Runtime is an embeddable HTTP server and client for Go. Use
+ordinary Go handlers to serve HTTP APIs, stream responses, send
+Server-Sent Events (SSE), handle WebSockets or call upstream services.
+The Go module uses cgo to call the shared native SDK for your platform.
+
+The CoAkka ecosystem provides polyglot tools for distributed applications,
+HTTP services and logging. CoAkka HTTP Runtime is the HTTP product and can
+be adopted independently.
+
+[CoAkka ecosystem](https://github.com/phuong-tran/coakka-publish#choose-your-product) · [Raspberry Pi 5 benchmarks](https://github.com/phuong-tran/coakka-publish/blob/main/coakka-http-runtime/benchmark/README.md)
 
 ## Requirements
 
@@ -22,10 +30,10 @@ For WSL2, select the Linux row for the architecture reported by Go.
 On Windows, put a cgo-compatible compiler for the selected architecture on
 `PATH` or point `CC` to it. Use a directory without spaces for the extracted SDK.
 
-## Install v2.0.1
+## Install v2.2.1
 
-Download `coakka-http-runtime-native-2.0.1-<suffix>.tar.gz` and
-`SHA256SUMS` from the [v2.0.1 GitHub Release](https://github.com/phuong-tran/coakka-http-runtime-go/releases/tag/v2.0.1).
+Download `coakka-http-runtime-native-2.2.0-<suffix>.tar.gz` and
+`SHA256SUMS` from the [v2.2.1 GitHub Release](https://github.com/phuong-tran/coakka-http-runtime-go/releases/tag/v2.2.1).
 Put both files in your application directory. Compare the archive's hash with
 its line in `SHA256SUMS` before extracting it. On macOS use
 `shasum -a 256 <archive>`, on Linux use `sha256sum <archive>`, and on Windows
@@ -35,11 +43,11 @@ Run `go mod init example.com/coakka-hello` if you are starting a new module.
 From that directory, fetch the Go connector.
 
 ```sh
-go get github.com/phuong-tran/coakka-http-runtime-go/v2@v2.0.1
+go get github.com/phuong-tran/coakka-http-runtime-go/v2@v2.2.1
 ```
 
 The Go tag supplies the connector source. The matching SDK archive supplies
-the headers and shared library for cgo. Keep both on version 2.0.1.
+the headers and shared library for cgo. Use module v2.2.1 with native SDK 2.2.0.
 
 On macOS or Linux, extract the archive and set these variables in the terminal
 where you will build and run the examples. The filename below is for macOS
@@ -47,7 +55,7 @@ ARM64. Use the filename for your target from the table.
 
 ```sh
 mkdir -p sdk
-tar -xzf coakka-http-runtime-native-2.0.1-macos-aarch64.tar.gz -C sdk
+tar -xzf coakka-http-runtime-native-2.2.0-macos-aarch64.tar.gz -C sdk
 export COAKKA_HTTP_SDK="$PWD/sdk"
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I$COAKKA_HTTP_SDK/include"
@@ -59,7 +67,7 @@ for Windows ARM64.
 
 ```powershell
 New-Item -ItemType Directory -Force sdk | Out-Null
-tar.exe -xzf coakka-http-runtime-native-2.0.1-windows-x86_64.tar.gz -C sdk
+tar.exe -xzf coakka-http-runtime-native-2.2.0-windows-x86_64.tar.gz -C sdk
 $env:COAKKA_HTTP_SDK = (Resolve-Path sdk).Path.Replace('\', '/')
 $env:CGO_ENABLED = '1'
 $env:CGO_CFLAGS = "-I$env:COAKKA_HTTP_SDK/include"
@@ -139,6 +147,33 @@ address. For example, if the server prints port `49321`, run
 `curl -i http://127.0.0.1:49321/hello/Ada`. In Windows PowerShell, use
 `curl.exe`. The response is HTTP 200 with the body `hello Ada`.
 Press Ctrl+C in the server terminal to stop it.
+
+## Choose an HTTP version
+
+`Listen` in the first example starts a plain HTTP/1.1 listener.
+For HTTPS, set `Listener` on the same builder before calling `Start`:
+
+```go
+builder.Listener(coakkahttp.Listener{
+	BindAddress:          "127.0.0.1",
+	Port:                 8443,
+	Protocol:             coakkahttp.ProtocolHTTP2,
+	Security:             coakkahttp.SecurityTLS,
+	CredentialID:         "local-example",
+	CredentialGeneration: 1,
+	CertificateChainFile: "http-test-tls/server.pem",
+	PrivateKeyFile:       "http-test-tls/server.key",
+})
+```
+
+Use `ProtocolHTTP3` to listen over UDP instead. Generate the
+[local TLS files](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/guides/http-versions/README.md#prepare-local-tls-files), then follow
+the curl exercise for that mode. The [complete Go sample](https://github.com/phuong-tran/coakka-samples/tree/main/coakka-http-runtime/protocol-listeners/go)
+includes startup and shutdown. Go 2.2.1 selects one protocol per standalone
+listener. The same-port V1 profile is available through Node.js, Bun or the
+native SDK.
+
+[HTTP/1.1](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/guides/http-versions/http1.md) · [HTTP/2](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/guides/http-versions/http2.md) · [HTTP/3](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/guides/http-versions/http3.md) · [All 3 on one port](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/guides/http-versions/multi.md)
 
 ## Outbound requests
 
@@ -230,7 +265,7 @@ identity. A completed HTTP response can carry a 4xx or 5xx status. Inspect
 1. Change imports of `github.com/phuong-tran/coakka-http-runtime-go` to
    `github.com/phuong-tran/coakka-http-runtime-go/v2`. The package name remains
    `coakkahttp`. Update dependencies that still import the v1 connector.
-2. Update the application to use the v2.0.1 Go module and the matching 2.0.1
+2. Update the application to use the v2.2.1 Go module and the matching 2.2.0
    native SDK. Replace the build and runtime library paths together.
 3. Run `go mod tidy` and `go test ./...` in your application.
 
@@ -241,7 +276,8 @@ that has fetched the module. Use `Builder` for the Go service API or `Runtime`
 for the lower-level pull API.
 
 - [URL grammar and glossary](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/reference/glossary.md)
-- [Go v1.1.2 sample and feature recipes](https://github.com/phuong-tran/coakka-samples/blob/7fab741dec51b2d8c156f653cdbe8442c56f2704/docs/coakka-http-runtime/go/integration.md)
+- [Feature recipes and coverage](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/reference/FEATURES.md)
+- [Archived 1.0.0 feature recipes](https://github.com/phuong-tran/coakka-samples/blob/main/docs/coakka-http-runtime/go/integration.md#4-try-the-http-features)
 
 ## Response compression
 
