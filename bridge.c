@@ -1,4 +1,14 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include "bridge.h"
+
+#include <string.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 _Static_assert(COAKKA_HTTP_HOST_ABI_VERSION == 10U,
                "review the Go projection for the new Core contract");
@@ -220,6 +230,89 @@ coakka_http_host_status_t coakka_http_go_service_create(
              : coakka_http_host_service_create_with_inspection(
                    configuration, inspection, routes, route_count, out_service,
                    failed_route_index);
+}
+
+typedef coakka_http_host_status_t (*multi_listener_getter_t)(
+    coakka_http_host_multi_listener_api_v1_t *);
+
+/* Resolve the optional entrypoint from the already-linked ABI 10 image.
+ * Older ABI 10 images can still load the standalone Go connector. */
+static multi_listener_getter_t multi_listener_getter(void) {
+  uint32_t (*abi_version)(void) = coakka_http_host_abi_version;
+  multi_listener_getter_t getter = NULL;
+#if defined(_WIN32)
+  LPCWSTR address = NULL;
+  HMODULE module = NULL;
+  _Static_assert(sizeof(address) == sizeof(abi_version), "pointer representation");
+  memcpy(&address, &abi_version, sizeof(address));
+  if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                         GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                         address, &module) != 0) {
+    FARPROC symbol = GetProcAddress(module, "coakka_http_host_multi_listener_get_api_v1");
+    _Static_assert(sizeof(getter) == sizeof(symbol), "pointer representation");
+    memcpy(&getter, &symbol, sizeof(getter));
+  }
+#else
+  const void *address = NULL;
+  Dl_info loaded = {0};
+  _Static_assert(sizeof(address) == sizeof(abi_version), "pointer representation");
+  memcpy(&address, &abi_version, sizeof(address));
+  if (dladdr(address, &loaded) != 0 && loaded.dli_fname != NULL) {
+    void *module = dlopen(loaded.dli_fname, RTLD_NOLOAD | RTLD_LAZY);
+    if (module != NULL) {
+      if (dlsym(module, "coakka_http_host_abi_version") == address) {
+        void *symbol = dlsym(module, "coakka_http_host_multi_listener_get_api_v1");
+        _Static_assert(sizeof(getter) == sizeof(symbol), "pointer representation");
+        memcpy(&getter, &symbol, sizeof(getter));
+      }
+      (void)dlclose(module);
+    }
+  }
+#endif
+  return getter;
+}
+
+coakka_http_host_status_t coakka_http_go_multi_listener_create(
+    coakka_http_host_configuration_t *configuration,
+    const coakka_http_host_inspection_options_t *inspection,
+    const coakka_http_host_route_t *routes, uint32_t route_count,
+    coakka_http_host_service_t **out_service, uint32_t *failed_route_index,
+    coakka_http_go_multi_listener_inspect_fn *out_inspect) {
+  multi_listener_getter_t getter = multi_listener_getter();
+  if (getter == NULL || inspection != NULL) {
+    return COAKKA_HTTP_HOST_UNSUPPORTED;
+  }
+  coakka_http_host_multi_listener_api_v1_t api = {0};
+  api.struct_size = sizeof(api);
+  coakka_http_host_status_t status = getter(&api);
+  if (status != COAKKA_HTTP_HOST_OK) {
+    return status;
+  }
+  if (api.struct_size != sizeof(api) || api.create == NULL ||
+      api.inspect == NULL ||
+      (api.supported_profiles & COAKKA_HTTP_HOST_MULTI_LISTENER_HTTPS_ALL_THREE) == 0U) {
+    return COAKKA_HTTP_HOST_UNSUPPORTED;
+  }
+  /* Only the standalone Go profile supplies a private execution preference.
+   * The multi-protocol profile leaves execution selection entirely to Core. */
+  configuration->execution = NULL;
+  status = api.create(configuration, routes, route_count, out_service,
+                      failed_route_index);
+  if (status == COAKKA_HTTP_HOST_OK) {
+    *out_inspect = api.inspect;
+  }
+  return status;
+}
+
+coakka_http_host_status_t coakka_http_go_multi_listener_inspect(
+    const coakka_http_go_multi_listener_inspect_fn *inspect,
+    const coakka_http_host_service_t *service,
+    coakka_http_host_multi_listener_info_v1_t *out) {
+  if (*inspect == NULL) {
+    return COAKKA_HTTP_HOST_UNSUPPORTED;
+  }
+  out->struct_size = sizeof(*out);
+  return (*inspect)(service, out);
 }
 
 #define FORWARD_SERVICE_STATUS(go_name, host_name)                             \

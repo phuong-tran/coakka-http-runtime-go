@@ -139,22 +139,45 @@ func (native *nativeService) interrupt() error {
 	return resultError(C.coakka_http_go_interrupt_requests(native.api, native.service))
 }
 
-func (native *nativeService) takeEvent(timeout C.uint64_t) (_ *Event, returned error) {
+// requestPayloadLease holds the private ABI descriptor, never a Go borrow of
+// the native bytes. The dispatcher is the sole owner allowed to return it.
+type requestPayloadLease struct {
+	event C.coakka_http_host_request_event_t
+	next  *requestPayloadLease
+}
+
+func (native *nativeService) releaseRequestPayload(lease *requestPayloadLease) error {
+	return resultError(C.coakka_http_go_release_request(native.api, native.service, &lease.event))
+}
+
+func (native *nativeService) takeEvent(timeout C.uint64_t) (*Event, error) {
+	return native.takeRequestEvent(timeout, nil)
+}
+
+func (native *nativeService) takeRequestEvent(timeout C.uint64_t, retained **requestPayloadLease) (_ *Event, returned error) {
 	var source C.coakka_http_host_request_event_t
 	// The private take bridge initializes through Core before waiting. It
-	// transfers a lease only on success; every successful projection releases it.
+	// transfers a lease only on success. Managed DATA and TRAILERS keep
+	// Core's credit until the handler consumes or discards the Go copy.
 	if err := resultError(C.coakka_http_go_take_request(native.api, native.service, timeout, &source)); err != nil {
 		return nil, err
 	}
-	defer func() {
-		returned = errors.Join(returned, resultError(C.coakka_http_go_release_request(native.api, native.service, &source)))
-	}()
+	kind := EventKind(source.kind)
+	if retained != nil && (kind == EventRequestData || kind == EventRequestTrailers) {
+		// Keep the descriptor even on projection failure. The caller still
+		// has to return this Core credit on the dispatcher.
+		*retained = &requestPayloadLease{event: source}
+	} else {
+		defer func() {
+			returned = errors.Join(returned, resultError(C.coakka_http_go_release_request(native.api, native.service, &source)))
+		}()
+	}
 	data, err := nativeBytes(source.data)
 	if err != nil {
 		return nil, err
 	}
 	event := &Event{
-		Kind:             EventKind(source.kind),
+		Kind:             kind,
 		Exchange:         ExchangeID{Slot: uint64(source.exchange.slot), Generation: uint64(source.exchange.generation)},
 		Sequence:         uint64(source.sequence),
 		HandlerBindingID: uint64(source.handler_binding_id),

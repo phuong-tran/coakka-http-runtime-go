@@ -128,7 +128,11 @@ func InspectRuntime() (RuntimeInspection, error) {
 
 // Open validates and copies a complete Config into a new, unstarted Runtime.
 func Open(config Config) (*Runtime, error) {
-	dispatcher, native, err := openDispatcher(config)
+	return openRuntime(config, false)
+}
+
+func openRuntime(config Config, multiProtocol bool) (*Runtime, error) {
+	dispatcher, native, err := openDispatcher(config, multiProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +228,7 @@ func (runtime *Runtime) Start() error {
 	return nil
 }
 
-// BoundPort returns Runtime's selected port for a started single-listener setup.
+// BoundPort returns the port of the started Runtime listener.
 func (runtime *Runtime) BoundPort() (uint16, error) {
 	native, done, err := runtime.acquire()
 	if err != nil {
@@ -384,19 +388,20 @@ func (runtime *Runtime) TakeEvent(timeout time.Duration) (*Event, error) {
 	return event, err
 }
 
-// takeDispatcherEvent is exclusively called by Service's pump already running
-// on the locked dispatcher. Avoid a second thread/channel handoff per request.
-func (runtime *Runtime) takeDispatcherEvent(timeout time.Duration) (*Event, error) {
+// takeDispatcherEvent runs on Service's existing locked dispatcher.
+func (runtime *Runtime) takeDispatcherEvent(timeout time.Duration) (*Event, *requestPayloadLease, error) {
 	value, err := nativeDuration(timeout)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	native, done, err := runtime.acquire()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer done.release()
-	return native.takeEvent(value)
+	var lease *requestPayloadLease
+	event, err := native.takeRequestEvent(value, &lease)
+	return event, lease, err
 }
 
 // ExchangeCancelled reports whether Runtime has observed cancellation.

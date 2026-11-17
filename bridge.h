@@ -89,6 +89,16 @@ coakka_http_go_service_create(const coakka_http_go_api_t *,
                               const coakka_http_host_inspection_options_t *,
                               const coakka_http_host_route_t *, uint32_t,
                               coakka_http_host_service_t **, uint32_t *);
+typedef coakka_http_host_status_t (*coakka_http_go_multi_listener_inspect_fn)(
+    const coakka_http_host_service_t *, coakka_http_host_multi_listener_info_v1_t *);
+coakka_http_host_status_t coakka_http_go_multi_listener_create(
+    coakka_http_host_configuration_t *, const coakka_http_host_inspection_options_t *,
+    const coakka_http_host_route_t *, uint32_t, coakka_http_host_service_t **,
+    uint32_t *,
+    coakka_http_go_multi_listener_inspect_fn *);
+coakka_http_host_status_t coakka_http_go_multi_listener_inspect(
+    const coakka_http_go_multi_listener_inspect_fn *, const coakka_http_host_service_t *,
+    coakka_http_host_multi_listener_info_v1_t *);
 coakka_http_host_status_t
 coakka_http_go_service_start(const coakka_http_go_api_t *,
                              coakka_http_host_service_t *,

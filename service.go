@@ -117,6 +117,7 @@ type routeDeclaration struct {
 type Builder struct {
 	cpu              CPUPolicy
 	listener         Listener
+	multiProtocol    bool
 	workers          uint32
 	limits           Limits
 	requestedBackend IOBackend
@@ -227,6 +228,16 @@ func (builder *Builder) Listener(listener Listener) *Builder {
 		return builder
 	}
 	builder.listener = listener
+	builder.multiProtocol = false
+	return builder
+}
+
+// MultiProtocolListener selects one TLS endpoint for HTTP/1.1, HTTP/2 and HTTP/3.
+func (builder *Builder) MultiProtocolListener(listener MultiProtocolListener) *Builder {
+	if builder.mutable() {
+		builder.listener = listener.coreListener()
+		builder.multiProtocol = true
+	}
 	return builder
 }
 
@@ -480,10 +491,14 @@ func (builder *Builder) Start() (*Service, error) {
 	if uint32(len(builder.routes)) > builder.limits.MaxHandlerBindings {
 		return nil, errors.New("route count exceeds the handler binding capacity")
 	}
-	requiredCapabilities := Capabilities(CapabilityInbound | CapabilityRouteRebind |
-		CapabilityRouteManifestPublication | CapabilityHealth |
-		CapabilityResponseStream | CapabilityResponseTrailers | CapabilityResponseWriteTimeout |
-		CapabilityServerSentEvents)
+	requiredCapabilities := Capabilities(CapabilityInbound | CapabilityHealth)
+	if builder.multiProtocol {
+		requiredCapabilities |= CapabilityHTTP2 | CapabilityHTTP3
+	} else {
+		requiredCapabilities |= CapabilityRouteRebind | CapabilityRouteManifestPublication |
+			CapabilityResponseStream | CapabilityResponseTrailers | CapabilityResponseWriteTimeout |
+			CapabilityServerSentEvents
+	}
 	usesWebSocket := false
 	for _, declaration := range builder.routes {
 		if declaration.route.BodyDelivery == BodyStream {
@@ -542,7 +557,7 @@ func (builder *Builder) Start() (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := Open(Config{
+	config := Config{
 		CPU:       builder.cpu,
 		IOBackend: builder.requestedBackend,
 		Limits: &RuntimeLimits{
@@ -577,7 +592,8 @@ func (builder *Builder) Start() (*Service, error) {
 		OutboundIdentities: append(
 			[]OutboundIdentity(nil), builder.outboundIDs...,
 		),
-	})
+	}
+	runtime, err := openRuntime(config, builder.multiProtocol)
 	if err != nil {
 		return nil, err
 	}
@@ -618,6 +634,7 @@ func (builder *Builder) Start() (*Service, error) {
 		remainingWorkers:      builder.workers,
 		workersDone:           make(chan struct{}),
 	}
+	service.requestPayloads.wake = service.wakeRequestPayloadReader
 	if usesWebSocket {
 		service.webSockets = newWebSocketDispatcher(service, info.Limits.MaxActiveExchanges)
 		service.webSocketReaderDone = make(chan struct{})
@@ -680,6 +697,7 @@ type Service struct {
 	pending               map[ExchangeID]struct{}
 	requestStreams        map[ExchangeID]*requestBodyStream
 	requestStreamCapacity uint32
+	requestPayloads       requestPayloadReturns
 	responseStreams       map[ExchangeID]*responseStreamState
 	responseWriteTimeout  time.Duration
 	runtime               *Runtime
@@ -962,10 +980,25 @@ func (service *Service) PollError() error {
 }
 
 func (service *Service) runPump() {
-	defer close(service.pumpDone)
+	defer func() {
+		service.finishRequestStreams()
+		service.errors.add(service.flushRequestPayloads())
+		close(service.pumpDone)
+	}()
+	var returns *requestPayloadReturns
 	for {
-		event, err := service.runtime.takeDispatcherEvent(servicePollInterval)
+		// Buffered-only services never touch the shared return queue here.
+		if returns != nil && returns.ready.Load() {
+			service.errors.add(service.flushRequestPayloads())
+		}
+		event, lease, err := service.runtime.takeDispatcherEvent(servicePollInterval)
+		if lease != nil {
+			returns = &service.requestPayloads
+		}
 		if err != nil {
+			if lease != nil {
+				service.requestPayloads.complete(lease)
+			}
 			var runtimeErr *Error
 			if errors.As(err, &runtimeErr) && (runtimeErr.Code == ResultTimeout || runtimeErr.Code == ResultClosed) {
 				if service.pumpMayStop() {
@@ -993,7 +1026,7 @@ func (service *Service) runPump() {
 			continue
 		}
 		if event.Kind == EventRequestData || event.Kind == EventRequestTrailers || event.Kind == EventRequestEnd {
-			service.routeRequestStreamEvent(event)
+			service.routeRequestStreamEvent(event, lease)
 			continue
 		}
 		if event.Kind != EventRequest || event.Request == nil {
@@ -1013,6 +1046,7 @@ func (service *Service) runPump() {
 				service.requestStreamCapacity,
 				event.Sequence,
 			)
+			stream.returns = &service.requestPayloads
 			service.stateMu.Lock()
 			service.requestStreams[event.Exchange] = stream
 			service.stateMu.Unlock()
@@ -1328,6 +1362,16 @@ func (service *Service) Close() error {
 		return closeFailure(errors.Join(service.drainFailure(), err), true)
 	}
 	service.shutdownErr = service.drainFailure()
+	if service.requestPayloads.ready.Load() {
+		// The pump has stopped and every stream has been closed. If a native
+		// release was refused, retry it on the dispatcher before destroying
+		// the same Core owner.
+		var releaseErr error
+		service.runtime.dispatcher.call(func() { releaseErr = service.flushRequestPayloads() })
+		if releaseErr != nil {
+			return closeFailure(errors.Join(service.shutdownErr, releaseErr), true)
+		}
+	}
 	if !service.jobsClosed {
 		close(service.jobs)
 		service.jobsClosed = true

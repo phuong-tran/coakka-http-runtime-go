@@ -12,7 +12,7 @@ import (
 	"unsafe"
 )
 
-func openNativeService(config Config) (_ *nativeService, returned error) {
+func openNativeService(api *C.coakka_http_go_api_t, config Config, multiProtocol bool) (*nativeService, error) {
 	// The public Go enum becomes a native boolean. Reject values which cannot
 	// be represented rather than silently mapping an unknown mode to disabled.
 	// Numeric compression policy and capability checks remain Core-owned.
@@ -20,15 +20,6 @@ func openNativeService(config Config) (_ *nativeService, returned error) {
 		config.Compression.Mode != CompressionDisabled && config.Compression.Mode != CompressionGZIP {
 		return nil, errors.New("compression mode cannot be represented by the Core configuration")
 	}
-	api, err := openNativeAPI()
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if returned != nil {
-			C.coakka_http_go_close(&api)
-		}
-	}()
 	if len(config.Listeners) > 1 {
 		return nil, errors.New("the native service accepts exactly one listener")
 	}
@@ -43,7 +34,7 @@ func openNativeService(config Config) (_ *nativeService, returned error) {
 	if len(config.Listeners) == 1 {
 		listener = config.Listeners[0]
 	}
-	if err = projectListener(&arena, &configuration, listener); err != nil {
+	if err := projectListener(&arena, &configuration, listener); err != nil {
 		return nil, err
 	}
 	// Opt-in is deliberately connector-visible, while support probing and the
@@ -56,13 +47,13 @@ func openNativeService(config Config) (_ *nativeService, returned error) {
 	if config.Compression != nil {
 		configuration.compression = nativeCompression(api, *config.Compression)
 	}
-	if err = projectStaticMounts(api, &arena, &configuration, config.StaticMounts); err != nil {
+	if err := projectStaticMounts(api, &arena, &configuration, config.StaticMounts); err != nil {
 		return nil, err
 	}
-	if err = projectFileAuthorities(api, &arena, &configuration, config.FileAuthorities); err != nil {
+	if err := projectFileAuthorities(api, &arena, &configuration, config.FileAuthorities); err != nil {
 		return nil, err
 	}
-	if err = projectOutbound(api, &arena, &configuration, config); err != nil {
+	if err := projectOutbound(api, &arena, &configuration, config); err != nil {
 		return nil, err
 	}
 
@@ -85,8 +76,16 @@ func openNativeService(config Config) (_ *nativeService, returned error) {
 	}
 	var service *C.coakka_http_host_service_t
 	failedIndex := C.uint32_t(C.COAKKA_HTTP_HOST_FAILED_INDEX_NONE)
-	if err = resultError(C.coakka_http_go_service_create(
-		api, &configuration, inspection, routes, routeCount, &service, &failedIndex)); err != nil {
+	var inspectMulti C.coakka_http_go_multi_listener_inspect_fn
+	var status C.coakka_http_host_status_t
+	if multiProtocol {
+		status = C.coakka_http_go_multi_listener_create(
+			&configuration, inspection, routes, routeCount, &service, &failedIndex, &inspectMulti)
+	} else {
+		status = C.coakka_http_go_service_create(
+			api, &configuration, inspection, routes, routeCount, &service, &failedIndex)
+	}
+	if err = resultError(status); err != nil {
 		if uint32(failedIndex) != uint32(C.COAKKA_HTTP_HOST_FAILED_INDEX_NONE) {
 			return nil, fmt.Errorf("route %d: %w", uint32(failedIndex), err)
 		}
@@ -95,7 +94,9 @@ func openNativeService(config Config) (_ *nativeService, returned error) {
 	if service == nil {
 		return nil, errors.New("native library returned an empty service")
 	}
-	return &nativeService{api: api, service: service, capabilities: nativeFeatures(api)}, nil
+	return &nativeService{
+		api: api, service: service, capabilities: nativeFeatures(api), inspectMulti: inspectMulti,
+	}, nil
 }
 
 func nativeLimits(api *C.coakka_http_go_api_t, source RuntimeLimits) C.coakka_http_host_limits_t {

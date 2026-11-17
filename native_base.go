@@ -8,6 +8,7 @@ package coakkahttp
 #cgo darwin CFLAGS: -Wno-strict-prototypes
 #cgo windows CFLAGS: -Wno-strict-prototypes
 #cgo LDFLAGS: -lcoakka_http_host
+#cgo linux LDFLAGS: -ldl
 #include "bridge.h"
 #include <stdlib.h>
 */
@@ -32,6 +33,7 @@ type nativeService struct {
 	api          *C.coakka_http_go_api_t
 	service      *C.coakka_http_host_service_t
 	capabilities Capabilities
+	inspectMulti C.coakka_http_go_multi_listener_inspect_fn
 }
 
 type nativeArena struct {
@@ -171,8 +173,10 @@ func nativeText(value C.coakka_http_host_bytes_t) (string, error) {
 
 func openNativeAPI() (*C.coakka_http_go_api_t, error) {
 	var api *C.coakka_http_go_api_t
-	if err := resultError(C.coakka_http_go_open(&api)); err != nil {
-		return nil, err
+	if status := C.coakka_http_go_open(&api); status != C.COAKKA_HTTP_HOST_OK {
+		// The image has not passed the ABI check. Even looking up a status
+		// name would call into that image through the unverified ABI.
+		return nil, &Error{Code: ResultCode(status), Detail: "native library ABI does not match the Go connector"}
 	}
 	if api == nil {
 		return nil, errors.New("native library returned an empty handle")

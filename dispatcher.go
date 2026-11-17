@@ -22,7 +22,11 @@ type dispatcherTask struct {
 	stop bool
 }
 
-func openDispatcher(config Config) (*dispatcher, *nativeService, error) {
+func openDispatcher(config Config, multiProtocol bool) (*dispatcher, *nativeService, error) {
+	api, err := openNativeAPI()
+	if err != nil {
+		return nil, nil, err
+	}
 	type opened struct {
 		native *nativeService
 		err    error
@@ -47,7 +51,7 @@ func openDispatcher(config Config) (*dispatcher, *nativeService, error) {
 			return
 		}
 		owner.cpu = cpu
-		native, err := openNativeService(config)
+		native, err := openNativeService(api, config, multiProtocol)
 		if err != nil {
 			leaveErr := scope.leave()
 			clean = leaveErr == nil
@@ -72,6 +76,7 @@ func openDispatcher(config Config) (*dispatcher, *nativeService, error) {
 	result := <-ready
 	if result.err != nil {
 		<-owner.done
+		closeNativeAPI(&api)
 		return nil, nil, result.err
 	}
 	return owner, result.native, nil
